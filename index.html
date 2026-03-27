@@ -6,21 +6,96 @@
   <title>The Condo Cafe — Menu</title>
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=Lora:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
   <script>
-    var VENMO_USERNAME = 'bearesp0019';
-    var GOOGLE_SHEET_URL = 'https://script.google.com/macros/s/AKfycbwi0FPysTdWbdOkx8K9yFr5Ph96WhJjE5yMnbgzKz42ensjbZJrh8iagcLRtmbsNH_p/exec';
+    var VENMO_USERNAME   = 'bearesp0019';
+    var GOOGLE_SHEET_URL = 'https://script.google.com/macros/s/AKfycbzk5-lTlWnDBg7B6N-vBzKziXi8e8azBeU1NyUaOSCb__uXCBtdYDGKxSn4rYoVKnTk/exec';
+
+    // ═══════════════════════════════════════════════════════════
+    // PROMO CODES
+    // Each code can have:
+    //   type:      'percent' (10 = 10% off) or 'fixed' (2 = $2 off)
+    //   value:     the discount amount
+    //   label:     shown to customer on receipt
+    //
+    //   --- LIMITING OPTIONS (all optional, mix and match) ---
+    //   maxUses:   how many times this code can be used total
+    //              e.g. 1 = single use, 5 = five uses, omit = unlimited
+    //   validDate: code only works on this exact date 'YYYY-MM-DD'
+    //              omit = works any day
+    //   expiresDate: code stops working after this date 'YYYY-MM-DD'
+    //              omit = never expires
+    //
+    // HOW maxUses WORKS:
+    //   Uses are tracked in the browser's localStorage per device.
+    //   This means one person can't burn through all 5 uses on
+    //   their own phone, but a different person on a different phone
+    //   gets a fresh count. For a popup where you hand out codes
+    //   personally, this is fine — just give each person a unique code.
+    //   For true server-side enforcement you'd need a backend.
+    //
+    // EXAMPLES:
+    //   Single-use code for one friend:
+    //     'FRIEND-JAY': { type:'percent', value:50, label:'50% off', maxUses:1 }
+    //
+    //   Opening day only (works all day, that day only):
+    //     'OPENDAY': { type:'fixed', value:2, label:'$2 off', validDate:'2025-06-15' }
+    //
+    //   5-use code that expires after a date:
+    //     'EARLYBIRD': { type:'fixed', value:3, label:'$3 off', maxUses:5, expiresDate:'2025-06-20' }
+    // ═══════════════════════════════════════════════════════════
     var PROMO_CODES = {
-      'FRIEND':  { type: 'percent', value: 50, label: '50% off — Friend discount' },
-      'OPENDAY': { type: 'percent', value: 2,  label: '$2 off — Opening Day' },
-      'LOYALTY': { type: 'fixed',   value: 1,  label: '$1 off — Loyal customer' },
+      'FRIEND':      { type: 'percent', value: 50, label: '50% off — Friend discount',  maxUses: 1 },
+      'FRIEND-JAY':  { type: 'percent', value: 50, label: '50% off — Friend discount',  maxUses: 1 },
+      'FRIEND-MIA':  { type: 'percent', value: 50, label: '50% off — Friend discount',  maxUses: 1 },
+      'OPENDAY':     { type: 'fixed',   value: 2,  label: '$2 off — Opening Day',       validDate: '2025-06-15' },
+      'LOYALTY':     { type: 'fixed',   value: 1,  label: '$1 off — Loyal customer' },
+      'EARLYBIRD':   { type: 'fixed',   value: 3,  label: '$3 off — Early bird',        maxUses: 5, expiresDate: '2025-06-20' },
     };
-    var cart = [];
+    // ═══════════════════════════════════════════════════════════
+
+    var cart        = [];
     var activePromo = null;
 
+    function genOrderNumber() {
+      return 'CC-' + Math.floor(1000 + Math.random() * 9000);
+    }
+
+    // ── Promo validation ───────────────────────────────────────
+    function getPromoUseCount(code) {
+      try { return parseInt(localStorage.getItem('promo_' + code) || '0', 10); } catch(e) { return 0; }
+    }
+    function incrementPromoUse(code) {
+      try { localStorage.setItem('promo_' + code, getPromoUseCount(code) + 1); } catch(e) {}
+    }
+    function validatePromo(code) {
+      // Returns { ok: true, promo } or { ok: false, error: 'message' }
+      var promo = PROMO_CODES[code];
+      if (!promo) return { ok: false, error: '❌ That code isn\'t valid. Check and try again.' };
+
+      var today = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
+
+      if (promo.validDate && promo.validDate !== today)
+        return { ok: false, error: '❌ That code isn\'t valid today.' };
+
+      if (promo.expiresDate && today > promo.expiresDate)
+        return { ok: false, error: '❌ That code has expired.' };
+
+      if (promo.maxUses) {
+        var used = getPromoUseCount(code);
+        if (used >= promo.maxUses)
+          return { ok: false, error: '❌ That code has already been used.' };
+      }
+
+      return { ok: true, promo: promo };
+    }
+
+    // ── Tag toggle ─────────────────────────────────────────────
     function toggle(el, groupId) {
       var tags = document.getElementById(groupId).querySelectorAll('.cc-tag');
       if (el.classList.contains('active')) { el.classList.remove('active'); }
       else { tags.forEach(function(t){ t.classList.remove('active'); }); el.classList.add('active'); }
     }
+
+    // ── Matcha price ───────────────────────────────────────────
     function getMatchaPrice() {
       var price = 4;
       var oat   = [...document.querySelectorAll('#milk-tags .cc-tag')].some(function(t){ return t.classList.contains('active') && t.textContent.includes('Oat'); });
@@ -44,6 +119,8 @@
       var active = document.querySelector('#' + tagsId + ' .cc-tag.active');
       addToCart(itemName + (active ? ' \u2013 ' + active.textContent.trim() : ''), price, btn);
     }
+
+    // ── Cart ───────────────────────────────────────────────────
     function addToCart(name, price, btn) {
       var existing = cart.find(function(i){ return i.name === name; });
       if (existing) { existing.qty = (existing.qty||1) + 1; }
@@ -60,9 +137,10 @@
     }
     function getCartTotal() { return cart.reduce(function(s,i){ return s + i.price * (i.qty||1); }, 0); }
     function getTotalCount() { return cart.reduce(function(s,i){ return s + (i.qty||1); }, 0); }
+
     function renderCart() {
       var count = getTotalCount(); var total = getCartTotal();
-      var badge = document.getElementById('cc-cart-badge');
+      var badge   = document.getElementById('cc-cart-badge');
       var linesEl = document.getElementById('cc-drawer-lines');
       var totalEl = document.getElementById('cc-drawer-total');
       var emptyEl = document.getElementById('cc-drawer-empty');
@@ -73,24 +151,36 @@
         emptyEl.style.display = 'none'; footerEl.style.display = 'block';
         linesEl.innerHTML = cart.map(function(i){
           var qty = i.qty||1;
-          return '<div class="cc-drawer-line"><div class="cc-drawer-line-info"><div class="cc-drawer-line-name">'+i.name+'</div><div class="cc-drawer-line-unit">$'+i.price+' each</div></div><div class="cc-drawer-line-controls"><button class="cc-qty-btn" onclick="changeQty('+i.id+',-1)">\u2212</button><span class="cc-qty-num">'+qty+'</span><button class="cc-qty-btn" onclick="changeQty('+i.id+',1)">+</button><span class="cc-drawer-line-price">$'+(i.price*qty)+'</span><button class="cc-line-remove" onclick="removeFromCart('+i.id+')" title="Remove">\u00d7</button></div></div>';
+          return '<div class="cc-drawer-line"><div class="cc-drawer-line-info"><div class="cc-drawer-line-name">'+i.name+'</div><div class="cc-drawer-line-unit">$'+i.price+' each</div></div>'
+            + '<div class="cc-drawer-line-controls">'
+            + '<button class="cc-qty-btn" onclick="changeQty('+i.id+',-1)">\u2212</button>'
+            + '<span class="cc-qty-num">'+qty+'</span>'
+            + '<button class="cc-qty-btn" onclick="changeQty('+i.id+',1)">+</button>'
+            + '<span class="cc-drawer-line-price">$'+(i.price*qty)+'</span>'
+            + '<button class="cc-line-remove" onclick="removeFromCart('+i.id+')" title="Remove">\u00d7</button>'
+            + '</div></div>';
         }).join('');
         totalEl.textContent = '$' + total;
       }
     }
-    function openCartDrawer() { document.getElementById('cc-side-drawer').classList.add('open'); document.getElementById('cc-drawer-overlay').classList.add('open'); }
+
+    function openCartDrawer()  { document.getElementById('cc-side-drawer').classList.add('open');    document.getElementById('cc-drawer-overlay').classList.add('open'); }
     function closeCartDrawer() { document.getElementById('cc-side-drawer').classList.remove('open'); document.getElementById('cc-drawer-overlay').classList.remove('open'); }
+
+    // ── Checkout ───────────────────────────────────────────────
     function goToCheckout() {
       if (cart.length === 0) return; closeCartDrawer(); activePromo = null;
-      document.getElementById('cc-promo-input').value = '';
-      document.getElementById('cc-promo-feedback').className = 'cc-promo-feedback';
+      document.getElementById('cc-promo-input').value          = '';
+      document.getElementById('cc-promo-feedback').className   = 'cc-promo-feedback';
       document.getElementById('cc-promo-feedback').textContent = '';
-      document.getElementById('cc-name-input').value = '';
-      document.getElementById('cc-name-error').style.display = 'none';
-      updateCheckoutPreview(); document.getElementById('cc-modal-overlay').classList.add('open');
+      document.getElementById('cc-name-input').value           = '';
+      document.getElementById('cc-name-error').style.display   = 'none';
+      updateCheckoutPreview();
+      document.getElementById('cc-modal-overlay').classList.add('open');
       setTimeout(function(){ document.getElementById('cc-name-input').focus(); }, 100);
     }
     function closeModal() { document.getElementById('cc-modal-overlay').classList.remove('open'); }
+
     function updateCheckoutPreview() {
       var subtotal = getCartTotal(); var discount = activePromo ? activePromo.discount : 0; var total = Math.max(0, subtotal - discount);
       var html = cart.map(function(i){ var qty=i.qty||1; return '<div style="display:flex;justify-content:space-between;gap:8px;"><span>'+i.name+(qty>1?' \u00d7'+qty:'')+'</span><span style="color:#1a1a1a;font-weight:500;flex-shrink:0;">$'+(i.price*qty)+'</span></div>'; }).join('');
@@ -98,38 +188,63 @@
       html += '<div style="display:flex;justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1.5px solid #c8bfb4;font-weight:600;color:#1a1a1a;"><span>Total</span><span>$'+total+'</span></div>';
       document.getElementById('cc-checkout-order-preview').innerHTML = html;
     }
+
     function applyPromo() {
-      var code = document.getElementById('cc-promo-input').value.trim().toUpperCase();
+      var code     = document.getElementById('cc-promo-input').value.trim().toUpperCase();
       var feedback = document.getElementById('cc-promo-feedback');
       if (!code) { feedback.className = 'cc-promo-feedback error'; feedback.textContent = 'Please enter a promo code.'; return; }
-      var promo = PROMO_CODES[code];
-      if (!promo) { feedback.className = 'cc-promo-feedback error'; feedback.textContent = '\u274c That code isn\'t valid. Check and try again.'; activePromo = null; updateCheckoutPreview(); return; }
+
+      var result = validatePromo(code);
+      if (!result.ok) {
+        feedback.className   = 'cc-promo-feedback error';
+        feedback.textContent = result.error;
+        activePromo = null; updateCheckoutPreview(); return;
+      }
+
+      var promo    = result.promo;
       var subtotal = getCartTotal();
       var discount = promo.type === 'percent' ? Math.round(subtotal * promo.value) / 100 : Math.min(promo.value, subtotal);
-      activePromo = { code: code, type: promo.type, value: promo.value, label: promo.label, discount: discount };
-      feedback.className = 'cc-promo-feedback success'; feedback.textContent = '\u2705 Code applied: ' + promo.label; updateCheckoutPreview();
+      activePromo  = { code: code, type: promo.type, value: promo.value, label: promo.label, discount: discount };
+      feedback.className   = 'cc-promo-feedback success';
+      feedback.textContent = '\u2705 Code applied: ' + promo.label;
+      updateCheckoutPreview();
     }
+
+    // ── Submit ─────────────────────────────────────────────────
     function submitOrder() {
       var nameInput = document.getElementById('cc-name-input'); var name = nameInput.value.trim();
       if (!name) { document.getElementById('cc-name-error').style.display = 'block'; nameInput.focus(); return; }
       document.getElementById('cc-name-error').style.display = 'none';
-      var subtotal = getCartTotal(); var discount = activePromo ? activePromo.discount : 0; var total = Math.max(0, subtotal - discount);
-      var orderItems = cart.map(function(i){ return i.name + ((i.qty||1)>1?' \u00d7'+i.qty:''); }).join(', ');
-      var promoNote = activePromo ? ' | Promo: ' + activePromo.code + ' (-$' + discount + ')' : '';
-      var now = new Date();
-      var timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      var dateStr = now.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-      closeModal(); showConfirmation(name, total, orderItems, timeStr, dateStr); launchVenmo(total, name, orderItems);
-      window._pendingOrder = { name: name, items: orderItems + promoNote, total: total, timestamp: now.toISOString() };
+
+      var subtotal    = getCartTotal();
+      var discount    = activePromo ? activePromo.discount : 0;
+      var total       = Math.max(0, subtotal - discount);
+      var orderItems  = cart.map(function(i){ return i.name + ((i.qty||1)>1?' \u00d7'+i.qty:''); }).join(', ');
+      var promoNote   = activePromo ? ' | Promo: ' + activePromo.code + ' (-$' + discount + ')' : '';
+      var orderNumber = genOrderNumber();
+      var now         = new Date();
+      var timeStr     = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      var dateStr     = now.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+
+      // Mark promo as used (increments localStorage counter)
+      if (activePromo) incrementPromoUse(activePromo.code);
+
+      logToSheet({ orderNumber: orderNumber, name: name, items: orderItems + promoNote, total: total, timestamp: now.toISOString() });
+      closeModal();
+      showConfirmation(name, total, orderItems, timeStr, dateStr, orderNumber);
+      launchVenmo(total, name, orderNumber);
     }
-    function showConfirmation(name, total, orderItems, timeStr, dateStr) {
-      document.getElementById('cc-confirm-greeting').textContent = 'Thanks, ' + name + '! We\'ll call your name when your order is ready.';
-      document.getElementById('cc-confirm-avatar').textContent = name.charAt(0).toUpperCase();
+
+    function showConfirmation(name, total, orderItems, timeStr, dateStr, orderNumber) {
+      document.getElementById('cc-confirm-greeting').textContent     = 'Thanks, ' + name + '! We\'ll call your order number when it\'s ready.';
+      document.getElementById('cc-confirm-avatar').textContent       = name.charAt(0).toUpperCase();
       document.getElementById('cc-confirm-name-display').textContent = name;
-      document.getElementById('cc-confirm-time').textContent = timeStr + ' \u00b7 ' + dateStr;
-      document.getElementById('cc-confirm-total').textContent = '$' + total;
-      document.getElementById('cc-venmo-handle').textContent = '@' + VENMO_USERNAME;
-      document.getElementById('cc-venmo-amount').textContent = '$' + total;
+      document.getElementById('cc-confirm-order-num').textContent    = '#' + orderNumber;
+      document.getElementById('cc-confirm-time').textContent         = timeStr + ' \u00b7 ' + dateStr;
+      document.getElementById('cc-confirm-total').textContent        = '$' + total;
+      document.getElementById('cc-venmo-handle').textContent         = '@' + VENMO_USERNAME;
+      document.getElementById('cc-venmo-amount').textContent         = '$' + total;
+      document.getElementById('cc-venmo-ordnum').textContent         = '#' + orderNumber;
       var lines = cart.map(function(i){ var qty=i.qty||1; return '<div class="cc-confirm-line"><span class="cc-confirm-line-name">'+i.name+(qty>1?' <span style="opacity:.55">\u00d7'+qty+'</span>':'')+'</span><span class="cc-confirm-line-price">$'+(i.price*qty)+'</span></div>'; }).join('');
       if (activePromo) lines += '<div class="cc-confirm-line" style="color:#2d6a4f;"><span>\ud83c\udf89 '+activePromo.label+'</span><span>\u2212$'+activePromo.discount+'</span></div>';
       document.getElementById('cc-confirm-lines').innerHTML = lines;
@@ -137,28 +252,33 @@
       document.getElementById('cc-paid-done').style.display = 'none';
       document.getElementById('cc-confirm-screen').classList.add('open');
     }
-    function launchVenmo(total, name, orderItems) {
-      var note = 'Condo Cafe order for ' + name + ': ' + orderItems;
+
+    function launchVenmo(total, name, orderNumber) {
+      var note = '#' + orderNumber + ' \u2014 Condo Cafe (' + name + ')';
       window.location.href = 'venmo://paycharge?txn=pay&recipients=' + encodeURIComponent(VENMO_USERNAME) + '&amount=' + total + '&note=' + encodeURIComponent(note);
       setTimeout(function(){ window.open('https://venmo.com/' + encodeURIComponent(VENMO_USERNAME) + '?txn=pay&amount=' + total + '&note=' + encodeURIComponent(note), '_blank'); }, 1500);
     }
+
+    function logToSheet(data) {
+      if (!GOOGLE_SHEET_URL || GOOGLE_SHEET_URL === 'YOUR_APPS_SCRIPT_URL_HERE') return;
+      fetch(GOOGLE_SHEET_URL, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data) }).catch(function(e){ console.error(e); });
+    }
+
     function confirmPayment() {
-      var order = window._pendingOrder; if (!order) return;
       document.getElementById('cc-paid-area').style.display = 'none';
       document.getElementById('cc-paid-done').style.display = 'block';
-      if (GOOGLE_SHEET_URL && GOOGLE_SHEET_URL !== 'YOUR_APPS_SCRIPT_URL_HERE') {
-        fetch(GOOGLE_SHEET_URL, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: order.name, items: order.items, total: order.total, timestamp: order.timestamp }) }).catch(function(e){ console.error(e); });
-      }
     }
+
     function startNewOrder() {
       cart = []; activePromo = null; renderCart();
       document.getElementById('cc-confirm-screen').classList.remove('open');
       document.querySelectorAll('.cc-tag.active').forEach(function(t){ t.classList.remove('active'); });
       updateMatchaPrice(); window.scrollTo({ top: 0, behavior: 'smooth' });
     }
+
     document.addEventListener('DOMContentLoaded', function(){
       renderCart();
-      document.getElementById('cc-name-input').addEventListener('keydown', function(e){ if(e.key==='Enter') submitOrder(); });
+      document.getElementById('cc-name-input').addEventListener('keydown',  function(e){ if(e.key==='Enter') submitOrder(); });
       document.getElementById('cc-promo-input').addEventListener('keydown', function(e){ if(e.key==='Enter') applyPromo(); });
     });
   </script>
@@ -174,8 +294,6 @@
     }
     body{font-family:'DM Sans',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.028'/%3E%3C/svg%3E")}
     .cc-wrap{max-width:680px;margin:0 auto;padding:0 1.25rem 6rem}
-
-    /* hero */
     .cc-hero{text-align:center;padding:3.5rem 1rem 2.5rem;margin-bottom:2rem;position:relative}
     .cc-hero::after{content:'';display:block;height:2px;background:linear-gradient(90deg,transparent,var(--matcha) 30%,var(--gold) 70%,transparent);margin-top:2.5rem;opacity:.35}
     .cc-badge{display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:var(--matcha);background:var(--matcha-light);border:1px solid rgba(58,107,71,.25);border-radius:999px;padding:5px 14px;margin-bottom:18px}
@@ -184,14 +302,10 @@
     .cc-title{font-family:'Playfair Display',serif;font-size:clamp(44px,9vw,64px);font-weight:900;line-height:1;letter-spacing:-.02em;color:var(--ink);margin-bottom:10px}
     .cc-title em{font-style:italic;color:var(--matcha);font-weight:700}
     .cc-tagline{font-family:'Lora',serif;font-size:15px;font-style:italic;color:var(--ink-soft)}
-
-    /* section labels */
     .cc-section-label{font-size:10px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--gold);margin-bottom:14px;display:flex;align-items:center;gap:10px}
     .cc-section-label::before,.cc-section-label::after{content:'';flex:1;height:1px}
     .cc-section-label::before{background:linear-gradient(90deg,transparent,var(--border))}
     .cc-section-label::after{background:linear-gradient(90deg,var(--border),transparent)}
-
-    /* item cards */
     .cc-item-card{background:#fff;border:1px solid var(--border);border-radius:18px;padding:1.4rem;margin-bottom:10px;box-shadow:var(--sh-sm);transition:box-shadow .25s,transform .2s;position:relative;overflow:hidden}
     .cc-item-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--matcha),var(--gold));opacity:0;transition:opacity .25s}
     .cc-item-card:hover{box-shadow:var(--sh-md);transform:translateY(-2px)}
@@ -209,16 +323,12 @@
     .cc-tag.active{background:var(--matcha);color:#fff;border-color:var(--matcha);box-shadow:0 2px 8px rgba(58,107,71,.3)}
     .cc-divider{border:none;height:1px;background:linear-gradient(90deg,transparent,var(--border) 30%,var(--border) 70%,transparent);margin:2rem 0}
     .cc-mix-note{font-size:12px;color:var(--ink-muted);margin-top:8px;font-style:italic}
-
-    /* deal card */
     .cc-deal-card{background:linear-gradient(135deg,#1c3829 0%,#2d5a3d 60%,#3a6b47 100%);border-radius:20px;padding:1.5rem 1.75rem;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:2rem;box-shadow:0 8px 32px rgba(29,56,41,.35);position:relative;overflow:hidden}
     .cc-deal-card::after{content:'';position:absolute;top:-40%;right:-10%;width:200px;height:200px;border-radius:50%;background:rgba(255,255,255,.04);pointer-events:none}
     .cc-deal-tag{font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);background:rgba(184,137,58,.18);border:1px solid rgba(184,137,58,.35);border-radius:999px;padding:3px 10px;display:inline-block;margin-bottom:8px}
     .cc-deal-name{font-family:'Playfair Display',serif;font-size:26px;font-weight:700;margin-bottom:4px;color:#fff}
     .cc-deal-desc{font-size:13px;color:rgba(255,255,255,.65);font-family:'Lora',serif;font-style:italic}
     .cc-deal-price{font-family:'Playfair Display',serif;font-size:48px;font-weight:900;color:#fff;flex-shrink:0;letter-spacing:-.02em}
-
-    /* add buttons */
     .cc-add-btn{display:inline-flex;align-items:center;gap:7px;margin-top:14px;padding:9px 20px;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;color:var(--ink);background:var(--cream);border:1.5px solid var(--border);border-radius:999px;cursor:pointer;transition:all .18s}
     .cc-add-btn:hover{background:var(--matcha);color:#fff;border-color:var(--matcha);box-shadow:0 4px 14px rgba(58,107,71,.3);transform:translateY(-1px)}
     .cc-add-btn svg{width:14px;height:14px;flex-shrink:0}
@@ -227,15 +337,11 @@
     .cc-deal-add-btn:hover{background:var(--gold-light);transform:translateY(-1px);box-shadow:0 4px 16px rgba(0,0,0,.25)}
     .cc-deal-add-btn svg{width:14px;height:14px;flex-shrink:0}
     .cc-deal-add-btn.cc-add-btn--flash{background:var(--matcha-light)!important}
-
-    /* cart fab */
     .cc-cart-fab{position:fixed;top:18px;right:18px;z-index:150;width:48px;height:48px;border-radius:50%;background:var(--ink);border:none;box-shadow:0 4px 18px rgba(28,26,22,.35);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .18s,box-shadow .18s}
     .cc-cart-fab:hover{transform:scale(1.08);box-shadow:0 6px 24px rgba(28,26,22,.45)}
     .cc-cart-fab svg{width:20px;height:20px;color:#fff}
     #cc-cart-badge{position:absolute;top:-5px;right:-5px;min-width:20px;height:20px;padding:0 5px;background:var(--red);color:#fff;border-radius:999px;font-size:11px;font-weight:600;display:none;align-items:center;justify-content:center;border:2px solid var(--cream);animation:popIn .3s cubic-bezier(.34,1.56,.64,1)}
     @keyframes popIn{from{transform:scale(.2);opacity:0}to{transform:scale(1);opacity:1}}
-
-    /* drawer */
     #cc-drawer-overlay{display:none;position:fixed;inset:0;background:rgba(20,16,10,.5);z-index:200;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
     #cc-drawer-overlay.open{display:block}
     #cc-side-drawer{position:fixed;top:0;right:0;bottom:0;width:370px;max-width:93vw;background:#1c1a16;z-index:210;display:flex;flex-direction:column;transform:translateX(110%);transition:transform .38s cubic-bezier(.4,0,.2,1);box-shadow:-8px 0 60px rgba(0,0,0,.4);border-radius:24px 0 0 24px}
@@ -268,11 +374,9 @@
     #cc-drawer-total{font-family:'Playfair Display',serif;font-size:32px;font-weight:900;color:#fff}
     .cc-drawer-checkout-btn{width:100%;padding:14px;border:none;border-radius:14px;background:linear-gradient(135deg,var(--matcha) 0%,#2d5a3d 100%);color:#fff;font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:all .18s;box-shadow:0 4px 18px rgba(58,107,71,.45)}
     .cc-drawer-checkout-btn:hover{filter:brightness(1.1);transform:translateY(-1px);box-shadow:0 6px 24px rgba(58,107,71,.55)}
-
-    /* modal */
     #cc-modal-overlay{display:none;position:fixed;inset:0;background:rgba(10,8,5,.65);z-index:300;align-items:center;justify-content:center;padding:1.5rem;backdrop-filter:blur(4px)}
     #cc-modal-overlay.open{display:flex}
-    .cc-modal{background:#fff;border-radius:22px;padding:2rem;max-width:420px;width:100%;text-align:center;box-shadow:var(--sh-lg)}
+    .cc-modal{background:#fff;border-radius:22px;padding:2rem;max-width:420px;width:100%;text-align:center;box-shadow:var(--sh-lg);max-height:90vh;overflow-y:auto}
     .cc-modal-icon{width:58px;height:58px;border-radius:50%;background:var(--matcha-light);display:flex;align-items:center;justify-content:center;margin:0 auto 1rem;font-size:26px}
     .cc-modal-title{font-family:'Playfair Display',serif;font-size:28px;font-weight:700;margin-bottom:5px}
     .cc-modal-desc{font-family:'Lora',serif;font-size:14px;font-style:italic;color:var(--ink-soft);line-height:1.6;margin-bottom:1.3rem}
@@ -296,14 +400,14 @@
     .cc-modal-close:hover{background:var(--cream-dark);filter:brightness(.93)}
     .cc-modal-pay-btn{display:inline-flex;align-items:center;gap:6px;padding:10px 22px;background:var(--venmo);color:#fff;border:none;border-radius:999px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s;box-shadow:0 3px 12px rgba(61,149,206,.3)}
     .cc-modal-pay-btn:hover{background:#2f7eb8}
-
-    /* confirmation */
     #cc-confirm-screen{display:none;position:fixed;inset:0;background:var(--cream);z-index:400;overflow-y:auto}
     #cc-confirm-screen.open{display:block}
     .cc-confirm-wrap{max-width:480px;margin:0 auto;padding:3rem 1.5rem;text-align:center}
     .cc-confirm-icon{width:76px;height:76px;border-radius:50%;background:var(--matcha-light);display:flex;align-items:center;justify-content:center;margin:0 auto 1.5rem;animation:popIn .45s cubic-bezier(.34,1.56,.64,1);font-size:36px}
     .cc-confirm-title{font-family:'Playfair Display',serif;font-size:36px;font-weight:900;margin-bottom:6px}
-    .cc-confirm-sub{font-family:'Lora',serif;font-size:15px;font-style:italic;color:var(--ink-soft);margin-bottom:2rem}
+    .cc-confirm-sub{font-family:'Lora',serif;font-size:15px;font-style:italic;color:var(--ink-soft);margin-bottom:1.5rem}
+    .cc-order-badge-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.14em;color:var(--ink-muted);margin-bottom:8px}
+    .cc-order-badge{display:inline-block;font-family:'Playfair Display',serif;font-size:38px;font-weight:900;color:var(--matcha);background:var(--matcha-light);border:2px solid rgba(58,107,71,.25);border-radius:16px;padding:10px 30px;margin-bottom:1.75rem;letter-spacing:.03em}
     .cc-confirm-card{background:#fff;border:1px solid var(--border);border-radius:18px;padding:1.5rem;text-align:left;margin-bottom:1.5rem;box-shadow:var(--sh-sm)}
     .cc-confirm-name-row{display:flex;align-items:center;gap:12px;margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border)}
     .cc-confirm-avatar{width:42px;height:42px;border-radius:50%;background:var(--matcha);color:#fff;font-family:'Playfair Display',serif;font-size:19px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
@@ -322,8 +426,6 @@
     .cc-confirm-new-order{display:inline-flex;align-items:center;gap:6px;padding:12px 28px;background:var(--ink);color:#fff;border:none;border-radius:999px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s}
     .cc-confirm-new-order:hover{background:#333}
     .cc-footer{text-align:center;font-family:'Lora',serif;font-size:12px;font-style:italic;color:var(--ink-muted);margin-top:3rem;padding-top:1.5rem;border-top:1px solid var(--border)}
-
-    /* page load */
     .cc-hero{animation:fadeUp .5s ease both}
     .cc-deal-card{animation:fadeUp .5s .05s ease both}
     .cc-item-card{animation:fadeUp .5s ease both}
@@ -332,7 +434,6 @@
     .cc-item-card:nth-of-type(3){animation-delay:.18s}
     .cc-item-card:nth-of-type(4){animation-delay:.23s}
     @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-
     @media(max-width:480px){
       .cc-title{font-size:42px}
       .cc-deal-price{font-size:38px}
@@ -362,7 +463,7 @@
     <div>
       <div class="cc-deal-tag">✦ Best Value</div>
       <div class="cc-deal-name">Meal Deal</div>
-      <div class="cc-deal-desc">One musubi and onigiri + iced matcha + lemon bars</div>
+      <div class="cc-deal-desc">One musubi or onigiri + iced matcha + lemon bars</div>
       <button class="cc-deal-add-btn" onclick="addToCart('Meal Deal', 12, this)">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="11"/><line x1="5" y1="8" x2="11" y2="8"/></svg>
         Add to order
@@ -386,6 +487,7 @@
     <div class="cc-options-label">Choose your filling</div>
     <div class="cc-tags" id="musubi-tags">
       <span class="cc-tag" onclick="toggle(this,'musubi-tags')">Spam</span>
+      <span class="cc-tag" onclick="toggle(this,'musubi-tags')">Gochujang Spam</span>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <button class="cc-add-btn" onclick="addFromCard('Spam Musubi',3,'musubi-tags',this)">
@@ -527,6 +629,8 @@
     <div class="cc-confirm-icon">&#9989;</div>
     <div class="cc-confirm-title">Order placed!</div>
     <div class="cc-confirm-sub" id="cc-confirm-greeting"></div>
+    <div class="cc-order-badge-label">Your order number</div>
+    <div class="cc-order-badge" id="cc-confirm-order-num">#CC-0000</div>
     <div class="cc-confirm-card">
       <div class="cc-confirm-name-row">
         <div class="cc-confirm-avatar" id="cc-confirm-avatar">?</div>
@@ -542,7 +646,7 @@
       </div>
     </div>
     <div class="cc-confirm-venmo-note">
-      &#128153; Venmo is opening — pay <strong id="cc-venmo-handle">@bearesp0019</strong> <strong id="cc-venmo-amount">$0</strong> to complete your order.
+      &#128153; Venmo is opening — pay <strong id="cc-venmo-handle">@bearesp0019</strong> <strong id="cc-venmo-amount">$0</strong> and include <strong id="cc-venmo-ordnum">#CC-0000</strong> in the note so we can match your payment.
     </div>
     <div id="cc-paid-area">
       <button class="cc-paid-btn" onclick="confirmPayment()">&#9989; I've sent the Venmo payment</button>
